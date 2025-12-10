@@ -24,8 +24,8 @@ export default function PredictPage() {
         // Pass data via query params for simplicity in this demo
         const searchParams = new URLSearchParams();
         searchParams.set('prediction', result.data.prediction);
-        searchParams.set('confidence', result.data.confidence.toString());
-        searchParams.set('reasons', JSON.stringify(result.data.reasons));
+        searchParams.set('confidence', Math.round(result.data.confidence*100).toString());
+        
         
         router.push(`/result?${searchParams.toString()}`);
     } else {

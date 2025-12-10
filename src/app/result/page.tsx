@@ -55,7 +55,7 @@ export default async function ResultPage({
             <Progress value={confidence} className={`h-3 ${isDiabetic ? '[&>div]:bg-red-600' : '[&>div]:bg-green-600'}`} />
           </div>
 
-          <div className="bg-slate-100 dark:bg-slate-800 p-4 rounded-lg space-y-3">
+          {/*<div className="bg-slate-100 dark:bg-slate-800 p-4 rounded-lg space-y-3">
             <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-2">Key Risk Factors Identified:</h3>
             <ul className="space-y-2">
               {reasons.map((reason, idx) => (
@@ -65,7 +65,7 @@ export default async function ResultPage({
                 </li>
               ))}
             </ul>
-          </div>
+          </div>*/}
         </CardContent>
         <CardFooter className="p-6 bg-slate-50 dark:bg-slate-900/50 rounded-b-lg">
           <Link href="/predict" className="w-full">

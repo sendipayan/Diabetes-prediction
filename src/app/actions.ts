@@ -1,109 +1,100 @@
-'use server';
+"use server";
 
-import Groq from 'groq-sdk';
-import { z } from 'zod';
-
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY || 'gsk_placeholder', // Fallback to avoid build errors, but runtime needs key
-});
-
-const InputSchema = z.object({
-  pregnancies: z.coerce.number(),
-  glucose: z.coerce.number(),
-  bloodPressure: z.coerce.number(),
-  skinThickness: z.coerce.number(),
-  insulin: z.coerce.number(),
-  bmi: z.coerce.number(),
-  diabetesPedigreeFunction: z.coerce.number(),
-  age: z.coerce.number(),
-});
-
-export type PredictionResult = {
-  prediction: 'Diabetic' | 'Non-Diabetic';
-  confidence: number;
-  reasons: string[];
+type PredictResponse = {
+  success: boolean;
+  data?: {
+    prediction: string;      // "Diabetic" / "Not Diabetic"
+    confidence: number;      // between 0 and 1
+    reasons: string[];       // you can fill later, keep empty for now
+  };
+  error?: string;
 };
 
-export async function predictDiabetes(formData: FormData): Promise<{ success: boolean; data?: PredictionResult; error?: string }> {
-  try {
-    const rawData = Object.fromEntries(formData.entries());
-    const validatedData = InputSchema.safeParse(rawData);
+const FLASK_API_URL =
+  process.env.FLASK_API_URL || "http://127.0.0.1:5000/predict";
 
-    if (!validatedData.success) {
-      return { success: false, error: 'Invalid input data' };
+export async function predictDiabetes(formData: FormData): Promise<PredictResponse> {
+  try {
+    // 1. Read values from formData (note: your input names are lowercase / camelCase)
+    const pregnancies = Number(formData.get("pregnancies"));
+    const glucose = Number(formData.get("glucose"));
+    const bloodPressure = Number(formData.get("bloodPressure"));
+    const skinThickness = Number(formData.get("skinThickness"));
+    const insulin = Number(formData.get("insulin"));
+    const bmi = Number(formData.get("bmi"));
+    const dpf = Number(formData.get("diabetesPedigreeFunction"));
+    const age = Number(formData.get("age"));
+
+    // 2. Basic validation (optional but good)
+    if (
+      [pregnancies, glucose, bloodPressure, skinThickness, insulin, bmi, dpf, age]
+        .some(v => Number.isNaN(v))
+    ) {
+      return { success: false, error: "Invalid numeric input." };
     }
 
-    const {
-      pregnancies,
-      glucose,
-      bloodPressure,
-      skinThickness,
-      insulin,
-      bmi,
-      diabetesPedigreeFunction,
-      age,
-    } = validatedData.data;
+    // 3. Build payload in the SAME KEY NAMES your Flask API expects
+    //    These must match FEATURE_ORDER in your api.py:
+    //    ["Pregnancies","Glucose","BloodPressure","SkinThickness","Insulin","BMI","DiabetesPedigreeFunction","Age"]
+    const payload = {
+      Pregnancies: pregnancies,
+      Glucose: glucose,
+      BloodPressure: bloodPressure,
+      SkinThickness: skinThickness,
+      Insulin: insulin,
+      BMI: bmi,
+      DiabetesPedigreeFunction: dpf,
+      Age: age,
+    };
 
-    const prompt = `
-      Act as a strict K-Nearest Neighbors (KNN) Machine Learning Classifier for Diabetes Prediction.
-      Analyze the following patient data:
-      - Pregnancies: ${pregnancies}
-      - Glucose Level: ${glucose} mg/dL
-      - Blood Pressure: ${bloodPressure} mmHg
-      - Skin Thickness: ${skinThickness} mm
-      - Insulin Level: ${insulin} mu U/ml
-      - BMI: ${bmi}
-      - Diabetes Pedigree Function: ${diabetesPedigreeFunction}
-      - Age: ${age} years
+    // 4. Call Flask API from the server (no browser CORS issue here)
+    const res = await fetch(FLASK_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
 
-      Based on this data, simulate a KNN prediction.
-      Return ONLY a JSON object with this exact structure, no markdown, no other text:
-      {
-        "prediction": "Diabetic" or "Non-Diabetic",
-        "confidence": number between 0 and 100,
-        "reasons": ["reason 1", "reason 2"]
-      }
-      
-      Rules:
-      1. If Glucose > 140 or BMI > 30, leaning towards Diabetic is higher.
-      2. If Age > 40 and History > 0.5, higher risk.
-      3. Provide 2 distinct, medical-sounding reasons based on the feature values (e.g., "High glucose levels indicate...", "Elevated BMI suggests...").
-    `;
-
-    try {
-      const completion = await groq.chat.completions.create({
-        messages: [{ role: 'system', content: 'You are a precise ML simulation engine.' }, { role: 'user', content: prompt }],
-        model: 'llama-3.1-8b-instant', // Fast and cheap
-        temperature: 0.1,
-        response_format: { type: 'json_object' },
-      });
-
-      const responseContent = completion.choices[0]?.message?.content;
-      if (!responseContent) throw new Error('No response from AI');
-
-      const result = JSON.parse(responseContent) as PredictionResult;
-      
-      // Ensure strict type safety on response
-      if (!['Diabetic', 'Non-Diabetic'].includes(result.prediction)) {
-        result.prediction = 'Non-Diabetic'; // Safety fallback
-      }
-
-      return { success: true, data: result };
-    } catch (apiError) {
-      console.error('Groq API Error:', apiError);
-      // Fallback simulation if API fails (e.g. no key)
-      const isRisk = glucose > 140 || bmi > 30;
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
       return {
-        success: true,
-        data: {
-          prediction: isRisk ? 'Diabetic' : 'Non-Diabetic',
-          confidence: Math.floor(Math.random() * (95 - 75) + 75),
-          reasons: ['Simulation fallback: API unavailable', isRisk ? 'High simulated risk factors' : 'Low simulated risk factors'],
-        },
+        success: false,
+        error: `Flask API error: ${res.status} ${res.statusText} ${errBody}`,
       };
     }
-  } catch (error) {
-    console.error('Prediction Error:', error);
-    return { success: false, error: 'Failed to process prediction' };
+
+    const data = await res.json();
+    // We assume Flask returns: { prediction: 0 or 1, probability: [p0, p1] }
+    const rawPred = data?.prediction;
+    const probs: number[] | undefined = data?.probability;
+
+    const label =
+      rawPred === 1
+        ? "Diabetic"
+        : rawPred === 0
+        ? "Not Diabetic"
+        : "Unknown";
+
+    // Confidence: pick probability corresponding to predicted class if available
+    let confidence = 0;
+    if (Array.isArray(probs) && (rawPred === 0 || rawPred === 1)) {
+      confidence = probs[rawPred] ?? 0;
+    }
+
+    return {
+      success: true,
+      data: {
+        prediction: label,
+        confidence,     // 0–1, you can multiply by 100 in the result page
+        reasons: [],    // you can later populate with feature-based explanations
+      },
+    };
+  } catch (err: any) {
+    console.error("predictDiabetes error:", err);
+    return {
+      success: false,
+      error: err?.message || "Unknown error",
+    };
   }
 }
